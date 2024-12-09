@@ -1,4 +1,4 @@
-use std::ptr::NonNull;
+use std::{marker::PhantomData, ptr::NonNull};
 
 const MAX_LEVEL: usize = 32;
 const P: f64 = 0.5;
@@ -6,6 +6,32 @@ const P: f64 = 0.5;
 struct Data<K, V> {
     key: K,
     value: V,
+}
+
+impl<K: Clone, V: Clone> Clone for Data<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            value: self.value.clone(),
+        }
+    }
+}
+
+impl<K: Copy, V: Copy> Copy for Data<K, V> {}
+
+impl<K, V> Into<(K, V)> for Data<K, V> {
+    fn into(self) -> (K, V) {
+        (self.key, self.value)
+    }
+}
+
+impl<K, V> Into<Data<K, V>> for (K, V) {
+    fn into(self) -> Data<K, V> {
+        Data {
+            key: self.0,
+            value: self.1,
+        }
+    }
 }
 
 struct Node<K, V> {
@@ -250,6 +276,26 @@ where
     pub fn len(&self) -> usize {
         self.len
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn clear(&mut self) {
+        while !self.is_empty() {
+            self.pop_front();
+        }
+    }
+}
+
+impl<K: Clone + Ord, V: Clone> Clone for SkipList<K, V> {
+    fn clone(&self) -> Self {
+        let mut new_list = SkipList::new();
+        for (k, v) in self.iter() {
+            new_list.insert(k.clone(), v.clone());
+        }
+        new_list
+    }
 }
 
 impl<K, V> Drop for SkipList<K, V> {
@@ -300,5 +346,287 @@ where
         }
 
         write!(f, "}}")
+    }
+}
+
+impl<K, V> SkipList<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        Iter {
+            cursor: unsafe { self.head.as_ref().forward[0] },
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
+        IterMut {
+            cursor: unsafe { self.head.as_ref().forward[0] },
+            _marker: PhantomData,
+        }
+    }
+}
+
+pub struct Iter<'a, K: 'a, V: 'a> {
+    cursor: Option<NonNull<Node<K, V>>>,
+    _marker: PhantomData<&'a Node<K, V>>,
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.cursor {
+            Some(node) => unsafe {
+                let node = node.as_ptr();
+                self.cursor = (*node).forward[0];
+
+                let data = (*node).data.as_ref().unwrap();
+                Some((&data.key, &data.value))
+            },
+            None => None,
+        }
+    }
+}
+
+pub struct IterMut<'a, K: 'a, V: 'a> {
+    cursor: Option<NonNull<Node<K, V>>>,
+    _marker: PhantomData<&'a mut Node<K, V>>,
+}
+
+impl<'a, K, V> Iterator for IterMut<'a, K, V> {
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.cursor {
+            Some(node) => unsafe {
+                let node = node.as_ptr();
+                self.cursor = (*node).forward[0];
+
+                let data = (*node).data.as_mut().unwrap();
+                Some((&data.key, &mut data.value))
+            },
+            None => None,
+        }
+    }
+}
+
+pub struct IntoIter<K, V> {
+    inner: SkipList<K, V>,
+}
+
+impl<K, V> SkipList<K, V> {
+    fn pop_front(&mut self) -> Option<(K, V)> {
+        let next_node = unsafe { (*self.head.as_ptr()).forward[0] };
+
+        if let Some(next_node) = next_node {
+            let head = self.head.as_ptr();
+            let del_node = next_node.as_ptr();
+
+            unsafe {
+                for level in 0..=((*del_node).level()) {
+                    (*head).forward[level] = (*del_node).forward[level];
+                }
+
+                let node = Box::from_raw(del_node);
+                let data = node.data.unwrap();
+
+                self.len -= 1;
+
+                Some(data.into())
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl<K, V> Iterator for IntoIter<K, V> {
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.pop_front()
+    }
+}
+
+impl<K, V> IntoIterator for SkipList<K, V> {
+    type Item = (K, V);
+
+    type IntoIter = IntoIter<K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter { inner: self }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use itertools::Itertools;
+    use rand::random;
+
+    use crate::SkipList;
+
+    #[test]
+    fn new() {
+        let skip_list: SkipList<i32, i32> = SkipList::new();
+        assert_eq!(skip_list.len(), 0);
+    }
+
+    #[test]
+    fn contains() {
+        const TEST_SIZE: usize = 10000000;
+
+        let mut data: HashMap<u64, u64> = HashMap::new();
+
+        while data.len() < TEST_SIZE {
+            let k = random();
+            if data.contains_key(&k) {
+                continue;
+            }
+            let v = random();
+
+            data.insert(k, v);
+        }
+
+        let data = data.into_iter().sorted().collect_vec();
+
+        let mut skip_list = SkipList::new();
+        for &(k, v) in data.iter() {
+            skip_list.insert(k, v);
+        }
+
+        assert_eq!(skip_list.len(), TEST_SIZE);
+
+        let res = skip_list.into_iter().collect_vec();
+        assert_eq!(res, data);
+    }
+
+    #[test]
+    fn remove() {
+        const TEST_SIZE: usize = 10000000;
+
+        let mut data: HashMap<u64, u64> = HashMap::new();
+
+        while data.len() < TEST_SIZE {
+            let k = random();
+            if data.contains_key(&k) {
+                continue;
+            }
+            let v = random();
+            data.insert(k, v);
+        }
+
+        let data = data.into_iter().sorted().collect_vec();
+        let delete_keys = data
+            .iter()
+            .map(|&(k, _)| k)
+            .filter(|&k| k % 2 == 0)
+            .collect_vec();
+
+        let mut skip_list = SkipList::new();
+        for &(k, v) in data.iter() {
+            skip_list.insert(k, v);
+        }
+
+        assert_eq!(skip_list.len(), TEST_SIZE);
+
+        for &k in delete_keys.iter() {
+            skip_list.remove(&k);
+            assert!(skip_list.get(&k).is_none());
+        }
+    }
+
+    #[test]
+    fn clear() {
+        const TEST_SIZE: usize = 10000000;
+
+        let mut data: HashMap<u64, u64> = HashMap::new();
+
+        while data.len() < TEST_SIZE {
+            let k = random();
+            if data.contains_key(&k) {
+                continue;
+            }
+            let v = random();
+
+            data.insert(k, v);
+        }
+
+        let data = data.into_iter().sorted().collect_vec();
+
+        let mut skip_list = SkipList::new();
+        for &(k, v) in data.iter() {
+            skip_list.insert(k, v);
+        }
+
+        assert_eq!(skip_list.len(), TEST_SIZE);
+
+        skip_list.clear();
+        assert_eq!(skip_list.len(), 0);
+        assert_eq!(skip_list.is_empty(), true);
+    }
+
+    #[test]
+    fn get() {
+        const TEST_SIZE: usize = 10000000;
+
+        let mut data: HashMap<u64, u64> = HashMap::new();
+
+        while data.len() < TEST_SIZE {
+            let k = random();
+            if data.contains_key(&k) {
+                continue;
+            }
+            let v = random();
+
+            data.insert(k, v);
+        }
+
+        let data = data.into_iter().sorted().collect_vec();
+
+        let mut skip_list = SkipList::new();
+        for &(k, v) in data.iter() {
+            skip_list.insert(k, v);
+        }
+
+        assert_eq!(skip_list.len(), TEST_SIZE);
+
+        for &(k, v) in data.iter() {
+            assert_eq!(skip_list.get(&k), Some(&v));
+        }
+    }
+
+    #[test]
+    fn clone() {
+        const TEST_SIZE: usize = 10000000;
+        let mut data: HashMap<u64, u64> = HashMap::new();
+        while data.len() < TEST_SIZE {
+            let k = random();
+            if data.contains_key(&k) {
+                continue;
+            }
+            let v = random();
+            data.insert(k, v);
+        }
+
+        let data = data.into_iter().sorted().collect_vec();
+
+        let mut skip_list = SkipList::new();
+        for &(k, v) in data.iter() {
+            skip_list.insert(k, v);
+        }
+
+        let skip_list2 = skip_list.clone();
+
+        assert_eq!(skip_list.len(), skip_list2.len());
+
+        for (k, v) in skip_list.iter() {
+            assert_eq!(skip_list2.get(k), Some(v));
+        }
+
+        assert_eq!(
+            skip_list.into_iter().collect_vec(),
+            skip_list2.into_iter().collect_vec()
+        );
     }
 }
