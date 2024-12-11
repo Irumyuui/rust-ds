@@ -1,27 +1,47 @@
-use std::ptr::NonNull;
+use std::{fmt::Display, ptr::NonNull};
 
 use data::Data;
 use node::Node;
 
 mod data;
+mod gen_level;
 mod iter;
 mod node;
 
+pub use gen_level::*;
 pub use iter::*;
 
-const MAX_LEVEL: usize = 32;
-const P: f64 = 0.6;
+pub const MAX_LEVEL: usize = 32;
 
-pub struct SkipList<K: Ord, V> {
+pub struct SkipList<K, V, G = DefaultGenerator>
+where
+    K: Ord,
+    G: LevelGenerator,
+{
     head: Node<K, V>,
     len: usize,
+    gen: G,
 }
 
-impl<K: Ord, V> SkipList<K, V> {
-    pub fn new() -> Self {
+impl<K, V> SkipList<K, V, DefaultGenerator>
+where
+    K: Ord,
+{
+    pub fn new() -> SkipList<K, V, DefaultGenerator> {
+        Default::default()
+    }
+}
+
+impl<K, V, G> SkipList<K, V, G>
+where
+    K: Ord,
+    G: LevelGenerator,
+{
+    pub fn with_gen(gen: G) -> Self {
         Self {
             head: Node::new(None, MAX_LEVEL),
             len: 0,
+            gen,
         }
     }
 
@@ -61,7 +81,7 @@ impl<K: Ord, V> SkipList<K, V> {
             }
         }
 
-        let new_level = random_level();
+        let new_level = self.gen.random_level();
         let new_node = Node::with_key_value(key, value, new_level);
         let mut new_node = Box::new(new_node);
         let new_node_ptr = NonNull::from(new_node.as_ref());
@@ -144,43 +164,10 @@ impl<K: Ord, V> SkipList<K, V> {
             }
         }
 
-        // unsafe {
-        //     if cur_ptr.as_ref().key().is_some_and(|k| key == k) {
-        //         return Some(cur_ptr);
-        //     }
-
-        //     if let Some(next_ptr) = cur_ptr.as_ref().next.as_ref() {
-        //         if next_ptr.as_ref().key().is_some_and(|k| key == k) {
-        //             return Some(NonNull::from(next_ptr.as_ref()));
-        //         }
-        //     }
-        // }
-
         None
-
-        // for find_level in (0..MAX_LEVEL).rev() {
-        //     unsafe {
-        //         while let Some(next_ptr) = cur_ptr.as_ref().forward[find_level] {
-        //             if next_ptr.as_ref().key().is_some_and(|k| k < key) {
-        //                 cur_ptr = next_ptr;
-        //             } else {
-        //                 break;
-        //             }
-        //         }
-        //     }
-        // }
-
-        // unsafe {
-        //     if let Some(next) = cur_ptr.as_ref().next.as_ref() {
-        //         if next.as_ref().key().is_some_and(|k| key == k) {
-        //             return Some(NonNull::from(next.as_ref()));
-        //         }
-        //     }
-        // }
-
-        // None
     }
 
+    #[inline]
     pub fn get(&self, key: &K) -> Option<&V> {
         match Self::get_node_ptr(&self.head, key) {
             Some(node_ptr) => unsafe { node_ptr.as_ref().value() },
@@ -188,6 +175,7 @@ impl<K: Ord, V> SkipList<K, V> {
         }
     }
 
+    #[inline]
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         match Self::get_node_ptr(&self.head, key) {
             Some(mut node_ptr) => unsafe { node_ptr.as_mut().value_mut() },
@@ -195,14 +183,17 @@ impl<K: Ord, V> SkipList<K, V> {
         }
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[inline]
     pub fn clear(&mut self) {
         while !self.is_empty() {
             self.remove_front();
@@ -226,13 +217,22 @@ impl<K: Ord, V> SkipList<K, V> {
     }
 }
 
-impl<K: Ord, V> Default for SkipList<K, V> {
-    fn default() -> Self {
-        Self::new()
+impl<K, V, G> Default for SkipList<K, V, G>
+where
+    K: Ord,
+    G: LevelGenerator + Default,
+{
+    #[inline]
+    fn default() -> SkipList<K, V, G> {
+        Self::with_gen(Default::default())
     }
 }
 
-impl<K: Ord, V> Drop for SkipList<K, V> {
+impl<K, V, G> Drop for SkipList<K, V, G>
+where
+    K: Ord,
+    G: LevelGenerator,
+{
     fn drop(&mut self) {
         let mut node = match self.head.next.take() {
             Some(node) => node,
@@ -246,9 +246,14 @@ impl<K: Ord, V> Drop for SkipList<K, V> {
     }
 }
 
-impl<K: Ord + Clone, V: Clone> Clone for SkipList<K, V> {
+impl<K, V, G> Clone for SkipList<K, V, G>
+where
+    K: Ord + Clone,
+    V: Clone,
+    G: LevelGenerator + Clone,
+{
     fn clone(&self) -> Self {
-        let mut new_sl = SkipList::new();
+        let mut new_sl = SkipList::with_gen(self.gen.clone());
         for (key, value) in self.iter() {
             new_sl.insert(key.clone(), value.clone());
         }
@@ -256,17 +261,23 @@ impl<K: Ord + Clone, V: Clone> Clone for SkipList<K, V> {
     }
 }
 
-fn random_level() -> usize {
-    let mut level = 1;
-    let mut x = P;
+impl<K, V> Display for SkipList<K, V>
+where
+    K: Ord + Display,
+    V: Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut it = self.iter();
 
-    let f = 1. - rand::random::<f64>();
-    while x > f && level < MAX_LEVEL {
-        level += 1;
-        x *= P;
+        write!(f, "{{")?;
+        if let Some((key, value)) = it.next() {
+            write!(f, "({}: {})", key, value)?;
+        }
+        for (key, value) in it {
+            write!(f, ",({}: {})", key, value)?;
+        }
+        write!(f, "}}")
     }
-
-    level
 }
 
 #[cfg(test)]
@@ -290,7 +301,7 @@ mod tests {
         let mut skiplist = SkipList::new();
 
         skiplist.insert(1, "value1");
-        assert_eq!(skiplist.insert(1, "value2"), Some("value1")); // 更新值并返回旧值
+        assert_eq!(skiplist.insert(1, "value2"), Some("value1"));
         assert_eq!(skiplist.get(&1), Some(&"value2"));
     }
 
@@ -302,9 +313,9 @@ mod tests {
         skiplist.insert(2, "value2");
         skiplist.insert(3, "value3");
 
-        assert_eq!(skiplist.remove(&2), Some("value2")); // 删除键2
-        assert_eq!(skiplist.get(&2), None); // 确保删除后不能找到
-        assert_eq!(skiplist.len(), 2); // 确保长度减少
+        assert_eq!(skiplist.remove(&2), Some("value2"));
+        assert_eq!(skiplist.get(&2), None);
+        assert_eq!(skiplist.len(), 2);
     }
 
     #[test]
@@ -312,7 +323,7 @@ mod tests {
         let mut skiplist = SkipList::new();
 
         skiplist.insert(1, "value1");
-        assert_eq!(skiplist.remove(&2), None); // 尝试删除不存在的键
+        assert_eq!(skiplist.remove(&2), None);
     }
 
     #[test]
@@ -323,8 +334,8 @@ mod tests {
         skiplist.insert(2, "value2");
         skiplist.clear();
 
-        assert_eq!(skiplist.len(), 0); // 确保清空后长度为0
-        assert!(skiplist.is_empty()); // 确保列表为空
+        assert_eq!(skiplist.len(), 0);
+        assert!(skiplist.is_empty());
     }
 
     #[test]
@@ -335,8 +346,20 @@ mod tests {
 
         let cloned_skiplist = skiplist.clone();
 
-        assert_eq!(cloned_skiplist.get(&1), Some(&"value1")); // 测试克隆的内容
+        assert_eq!(cloned_skiplist.get(&1), Some(&"value1"));
         assert_eq!(cloned_skiplist.get(&2), Some(&"value2"));
-        assert_eq!(cloned_skiplist.len(), 2); // 确保长度相同
+        assert_eq!(cloned_skiplist.len(), 2);
+    }
+
+    #[test]
+    fn display() {
+        let mut skiplist = SkipList::new();
+        skiplist.insert(1, "value1");
+        skiplist.insert(2, "value2");
+
+        assert_eq!(format!("{}", skiplist), "{(1: value1),(2: value2)}");
+
+        skiplist.remove(&1);
+        assert_eq!(format!("{}", skiplist), "{(2: value2)}");
     }
 }

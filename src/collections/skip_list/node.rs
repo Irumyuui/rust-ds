@@ -8,7 +8,10 @@ pub(crate) struct Node<K, V> {
     pub(crate) forward: Vec<Option<NonNull<Node<K, V>>>>,
 }
 
-impl<K: Ord, V> Node<K, V> {
+impl<K, V> Node<K, V>
+where
+    K: Ord,
+{
     #[inline]
     pub(crate) fn new(data: Option<Data<K, V>>, level: usize) -> Self {
         Self {
@@ -74,17 +77,3 @@ impl<K, V> Into<Option<(K, V)>> for Node<K, V> {
         self.data.map(|data| data.into())
     }
 }
-
-// impl<K, V> Drop for Node<K, V> {
-//     fn drop(&mut self) {
-//         let mut node = match self.next.take() {
-//             Some(node) => node,
-//             None => return,
-//         };
-
-//         while let Some(next_node) = node.next.take() {
-//             drop(node);
-//             node = next_node;
-//         }
-//     }
-// }

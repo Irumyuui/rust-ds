@@ -20,7 +20,11 @@ impl<K, V> From<Data<K, V>> for (K, V) {
     }
 }
 
-impl<K: Display, V: Display> Display for Data<K, V> {
+impl<K, V> Display for Data<K, V>
+where
+    K: Display,
+    V: Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}, {})", self.key, self.value)
     }

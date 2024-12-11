@@ -1,11 +1,19 @@
-use super::{Node, SkipList};
+use super::{gen_level::LevelGenerator, Node, SkipList};
 
-pub struct Iter<'a, K: 'a, V: 'a> {
+pub struct Iter<'a, K, V>
+where
+    K: 'a,
+    V: 'a,
+{
     current: Option<&'a Node<K, V>>,
     _marker: std::marker::PhantomData<&'a Node<K, V>>,
 }
 
-impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
+impl<'a, K, V> Iterator for Iter<'a, K, V>
+where
+    K: 'a,
+    V: 'a,
+{
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -50,16 +58,24 @@ impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
 
                 Some(result)
             }
-            None => todo!(),
+            None => None,
         }
     }
 }
 
-pub struct IntoIter<K: Ord, V> {
-    inner: SkipList<K, V>,
+pub struct IntoIter<K, V, G>
+where
+    K: Ord,
+    G: LevelGenerator,
+{
+    inner: SkipList<K, V, G>,
 }
 
-impl<K: Ord, V> Iterator for IntoIter<K, V> {
+impl<K, V, G> Iterator for IntoIter<K, V, G>
+where
+    K: Ord,
+    G: LevelGenerator,
+{
     type Item = (K, V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -67,17 +83,25 @@ impl<K: Ord, V> Iterator for IntoIter<K, V> {
     }
 }
 
-impl<K: Ord, V> IntoIterator for SkipList<K, V> {
+impl<K, V, G> IntoIterator for SkipList<K, V, G>
+where
+    K: Ord,
+    G: LevelGenerator,
+{
     type Item = (K, V);
 
-    type IntoIter = IntoIter<K, V>;
+    type IntoIter = IntoIter<K, V, G>;
 
     fn into_iter(self) -> Self::IntoIter {
         IntoIter { inner: self }
     }
 }
 
-impl<K: Ord, V> SkipList<K, V> {
+impl<K, V, G> SkipList<K, V, G>
+where
+    K: Ord,
+    G: LevelGenerator,
+{
     pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             current: self.head.next.as_ref().map(|node| node.as_ref()),
@@ -126,5 +150,53 @@ mod tests {
             assert_eq!(*k, i);
             assert_eq!(*v, (i * 10).to_string());
         }
+    }
+
+    #[test]
+    fn iter_mut() {
+        const TEST_CASE: usize = 10000000;
+
+        let mut sl = SkipList::new();
+
+        for i in 0..TEST_CASE {
+            let res = sl.insert(i, i.to_string());
+            assert!(res.is_none());
+        }
+
+        assert_eq!(sl.len(), TEST_CASE);
+
+        for (i, (k, v)) in sl.iter_mut().enumerate() {
+            assert_eq!(*k, i);
+            assert_eq!(*v, i.to_string());
+            *v = (i * 10).to_string();
+        }
+
+        for (i, (k, v)) in sl.iter().enumerate() {
+            assert_eq!(*k, i);
+            assert_eq!(*v, (i * 10).to_string());
+        }
+    }
+
+    #[test]
+    fn into_iter() {
+        const TEST_CASE: usize = 10000000;
+
+        let mut sl = SkipList::new();
+
+        for i in 0..TEST_CASE {
+            let res = sl.insert(i, i.to_string());
+            assert!(res.is_none());
+        }
+
+        assert_eq!(sl.len(), TEST_CASE);
+
+        let mut count = 0;
+        for (k, v) in sl.into_iter() {
+            assert_eq!(k, count);
+            assert_eq!(v, count.to_string());
+            count += 1;
+        }
+
+        assert_eq!(count, TEST_CASE);
     }
 }
